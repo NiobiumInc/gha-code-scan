@@ -80,19 +80,44 @@ export function resolveRepoAndSha(): { owner: string; repo: string; sha: string 
   };
 }
 
+// Hidden marker used to find the action's previous report comment so it can
+// be updated in place. Editing a comment does not trigger GitHub
+// notifications, so repeated scans on the same PR don't email subscribers.
+const REPORT_COMMENT_MARKER = '<!-- scanoss-scan-report -->';
+
 /**
- * Creates a comment on the current pull request with the provided message.
+ * Creates or updates the scan report comment on the current pull request.
+ * The first run creates the comment; subsequent runs edit it in place.
  */
 export async function createCommentOnPR(message: string): Promise<void> {
   const octokit = getOctokit(inputs.GITHUB_TOKEN);
+  const body = `${REPORT_COMMENT_MARKER}\n${message}`;
 
-  core.debug('Creating comment on PR');
-  octokit.rest.issues.createComment({
+  const comments = await octokit.paginate(octokit.rest.issues.listComments, {
     issue_number: context.issue.number,
     owner: context.repo.owner,
     repo: context.repo.repo,
-    body: message
+    per_page: 100
   });
+  const existing = comments.find(c => c.body?.includes(REPORT_COMMENT_MARKER));
+
+  if (existing) {
+    core.debug(`Updating existing PR comment ${existing.id}`);
+    await octokit.rest.issues.updateComment({
+      comment_id: existing.id,
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      body
+    });
+  } else {
+    core.debug('Creating comment on PR');
+    await octokit.rest.issues.createComment({
+      issue_number: context.issue.number,
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      body
+    });
+  }
 }
 
 /**

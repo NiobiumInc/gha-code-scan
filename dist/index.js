@@ -96011,15 +96011,35 @@ function resolveRepoAndSha() {
     sha: import_github.context.sha
   };
 }
+var REPORT_COMMENT_MARKER = "<!-- scanoss-scan-report -->";
 async function createCommentOnPR(message) {
   const octokit = (0, import_github.getOctokit)(GITHUB_TOKEN);
-  debug("Creating comment on PR");
-  octokit.rest.issues.createComment({
+  const body2 = `${REPORT_COMMENT_MARKER}
+${message}`;
+  const comments = await octokit.paginate(octokit.rest.issues.listComments, {
     issue_number: import_github.context.issue.number,
     owner: import_github.context.repo.owner,
     repo: import_github.context.repo.repo,
-    body: message
+    per_page: 100
   });
+  const existing = comments.find((c) => c.body?.includes(REPORT_COMMENT_MARKER));
+  if (existing) {
+    debug(`Updating existing PR comment ${existing.id}`);
+    await octokit.rest.issues.updateComment({
+      comment_id: existing.id,
+      owner: import_github.context.repo.owner,
+      repo: import_github.context.repo.repo,
+      body: body2
+    });
+  } else {
+    debug("Creating comment on PR");
+    await octokit.rest.issues.createComment({
+      issue_number: import_github.context.issue.number,
+      owner: import_github.context.repo.owner,
+      repo: import_github.context.repo.repo,
+      body: body2
+    });
+  }
 }
 async function getFirstRunId() {
   let firstRunId = import_github.context.runId;

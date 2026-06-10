@@ -32,9 +32,12 @@ jest.mock('../src/app.input', () => ({
 }));
 
 const mockOctokit = {
+  paginate: jest.fn(),
   rest: {
     issues: {
-      createComment: jest.fn()
+      createComment: jest.fn(),
+      updateComment: jest.fn(),
+      listComments: jest.fn()
     }
   }
 };
@@ -118,6 +121,8 @@ describe('GitHub Utils', () => {
   });
 
   describe('createCommentOnPR', () => {
+    const MARKER = '<!-- scanoss-scan-report -->';
+
     beforeEach(() => {
       (context.eventName as any) = 'pull_request';
       (context.payload as any) = {
@@ -128,8 +133,9 @@ describe('GitHub Utils', () => {
       (context.repo as any) = { owner: 'test-owner', repo: 'test-repo' };
     });
 
-    it('should create comment on pull request successfully', async () => {
+    it('should create a marked comment when no previous report comment exists', async () => {
       const commentBody = 'Test comment body';
+      mockOctokit.paginate.mockResolvedValue([{ id: 1, body: 'unrelated comment' }]);
       mockOctokit.rest.issues.createComment.mockResolvedValue({
         data: { id: 123, html_url: 'https://github.com/test/comment' }
       });
@@ -140,27 +146,32 @@ describe('GitHub Utils', () => {
         issue_number: 42,
         owner: 'test-owner',
         repo: 'test-repo',
-        body: commentBody
+        body: `${MARKER}\n${commentBody}`
       });
+      expect(mockOctokit.rest.issues.updateComment).not.toHaveBeenCalled();
+    });
+
+    it('should update the existing report comment in place instead of creating a new one', async () => {
+      mockOctokit.paginate.mockResolvedValue([
+        { id: 7, body: 'unrelated comment' },
+        { id: 99, body: `${MARKER}\nold report` }
+      ]);
+      mockOctokit.rest.issues.updateComment.mockResolvedValue({ data: { id: 99 } });
+
+      await createCommentOnPR('new report');
+
+      expect(mockOctokit.rest.issues.updateComment).toHaveBeenCalledWith({
+        comment_id: 99,
+        owner: 'test-owner',
+        repo: 'test-repo',
+        body: `${MARKER}\nnew report`
+      });
+      expect(mockOctokit.rest.issues.createComment).not.toHaveBeenCalled();
     });
 
     it('should handle missing pull request number', async () => {
       (context.issue as any) = {}; // Missing number property
-
-      await createCommentOnPR('Test comment');
-
-      expect(mockOctokit.rest.issues.createComment).toHaveBeenCalledWith({
-        issue_number: undefined,
-        owner: 'test-owner',
-        repo: 'test-repo',
-        body: 'Test comment'
-      });
-    });
-
-    it('should call createComment and not handle promise rejections', async () => {
-      (context.issue as any) = { number: 42 };
-      // Since the function doesn't await the API call, we can't easily test error scenarios
-      // because unhandled promise rejections cause test failures
+      mockOctokit.paginate.mockResolvedValue([]);
       mockOctokit.rest.issues.createComment.mockResolvedValue({
         data: { id: 123, html_url: 'https://github.com/test/comment' }
       });
@@ -168,10 +179,10 @@ describe('GitHub Utils', () => {
       await createCommentOnPR('Test comment');
 
       expect(mockOctokit.rest.issues.createComment).toHaveBeenCalledWith({
-        issue_number: 42,
+        issue_number: undefined,
         owner: 'test-owner',
         repo: 'test-repo',
-        body: 'Test comment'
+        body: `${MARKER}\nTest comment`
       });
     });
   });
